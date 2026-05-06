@@ -62,3 +62,97 @@ Wie viele Antwortoptionen hat diese Frage?
 :::geogebra{title="GeoGebra" file="assets/geogebra.ggb" width=1040 height=640}
 <p>Eine lokale GeoGebra-Datei.</p>
 :::
+
+## Neuer Unterabschnitt
+
+:::choice{title="Abstimmung" allowmultiple=true limitanswers=true timeopen=1778074560 timeclose=1778852160}
+<p>Beschreibung</p>
+
+- O1 {maxanswers=1}
+- O2 {maxanswers=2}
+- O3 {maxanswers=3}
+- O4 {maxanswers=4}
+- O5 {maxanswers=5}
+:::
+
+::::questionnaire{title="Befragung" opendate=1778074800 closedate=1778247600 survey_info="<p>Beschreibung/Zusatzinfos</p>" thank_head="Danke"}
+<p>Beschreibung</p>
+
+:::q{type="sectiontext" name="Hinweis"}
+<h3>Einführung</h3>
+:::
+
+:::q{type="pagebreak"}
+:::
+
+:::q{type="rate" name="Skala" required=true length=7}
+<p>Bewerte die Aussage.</p>
+
+- mögliche Antwort
+:::
+
+:::q{id="checkboxen" type="checkbox" name="Checkboxen" precise=1}
+<p>Wähle passende Optionen.</p>
+
+- Option A {id="option_a"}
+- Option B {id="option_b"}
+:::
+
+:::q{id="datum" type="date" name="Datum" required=true depends_on="checkboxen:option_b"}
+<p>Wähle ein Datum.</p>
+:::
+
+:::q{type="dropdown" name="Dropdown"}
+<p>Wähle eine Antwort.</p>
+
+- Erste Antwort
+- Zweite Antwort
+:::
+
+:::q{type="yesno" name="Ja/Nein" required=true}
+<p>Stimmst du zu?</p>
+:::
+
+:::q{type="radio" name="Radio" required=true length=1}
+<p>Wähle genau eine Antwort.</p>
+
+- Ja
+- Nein
+:::
+
+:::q{id="schule_spass" type="radio" name="Macht dir Schule Spaß?" required=true length=1}
+<p>Macht dir Schule Spaß?</p>
+
+- Ja {id="ja"}
+- Nein {id="nein"}
+:::
+
+:::q{id="schule_spass_ja" type="text" name="Was macht dir besonders Spaß?" length=40 depends_on="schule_spass:ja"}
+<p>Was macht dir an Schule besonders Spaß?</p>
+:::
+
+:::q{id="schule_spass_nein" type="textarea" name="Warum nicht?" length=40 precise=5 depends_on="schule_spass:nein"}
+<p>Warum macht dir Schule im Moment keinen Spaß?</p>
+:::
+
+:::q{type="slider" name="Schieberegler" minrange=-3 maxrange=3 startingvalue=0 stepvalue=1 leftlabel="niedrig" centerlabel="mittel" rightlabel="hoch"}
+<p>Ordne dich auf der Skala ein.</p>
+:::
+
+:::q{type="text" name="Texteingabe" required=true length=20}
+<p>Kurze Antwort.</p>
+:::
+
+:::q{type="textarea" name="Textfeld" required=true length=20 precise=25}
+<p>Längere Antwort.</p>
+:::
+::::
+
+:::board{title="Board" background_color="bdb7ff" sortby=3}
+<p>Beschreibung</p>
+
+- Überschrift1
+  - Karte mit **Markdown** und *Hervorhebung* {heading="Start"}
+- Überschrift2
+- Überschrift3
+:::

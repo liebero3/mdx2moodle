@@ -58,9 +58,21 @@ def inspect_mbz(path: str | Path) -> MbzReport:
                         "title": _null_to_empty(root.findtext("name", "")),
                         "summary": root.findtext("summary", ""),
                         "sequence": root.findtext("sequence", ""),
+                        "component": _null_to_empty(root.findtext("component", "")),
+                        "itemid": _null_to_empty(root.findtext("itemid", "")),
                         "path": name,
                     }
                 )
+        backup_sections = {
+            section.findtext("sectionid", ""): section
+            for section in backup.findall("information/contents/sections/section")
+        }
+        for section in sections:
+            backup_section = backup_sections.get(str(section["id"]))
+            if backup_section is None:
+                continue
+            section["parentcmid"] = backup_section.findtext("parentcmid", "")
+            section["modname"] = backup_section.findtext("modname", "")
         sections.sort(key=lambda section: section["index"])
 
         activities: list[dict[str, Any]] = []
@@ -74,6 +86,7 @@ def inspect_mbz(path: str | Path) -> MbzReport:
                     "type": modulename,
                     "title": activity.findtext("title", ""),
                     "directory": activity.findtext("directory", ""),
+                    "insubsection": activity.findtext("insubsection", ""),
                     "module_xml": f"activities/{modulename}_{moduleid}/module.xml",
                     "activity_xml": f"activities/{modulename}_{moduleid}/{modulename}.xml",
                 }

@@ -7,8 +7,21 @@ from .parser import parse_mdx
 
 
 _DIRECTIVE_RE = re.compile(r"^(?P<fence>:{3,})(?P<type>[A-Za-z][\w-]*)(?P<attrs>\{.*\})?\s*$")
-_TOP_LEVEL_DIRECTIVES = {"label", "book", "quiz", "folder", "geogebra", "assign", "forum", "sectionSummary"}
-_ALL_DIRECTIVES = _TOP_LEVEL_DIRECTIVES | {"page", "question"}
+_TOP_LEVEL_DIRECTIVES = {
+    "label",
+    "book",
+    "quiz",
+    "folder",
+    "geogebra",
+    "assign",
+    "forum",
+    "choice",
+    "questionnaire",
+    "board",
+    "subsection",
+    "sectionSummary",
+}
+_ALL_DIRECTIVES = _TOP_LEVEL_DIRECTIVES | {"page", "question", "q"}
 
 
 def validate_mdx_file(path: str | Path) -> list[str]:
@@ -69,10 +82,14 @@ def _validate_directive_nesting(source: str) -> list[str]:
             issues.append("'page' directives are only allowed inside 'book'")
         if directive_type == "question" and parent != "quiz":
             issues.append("'question' directives are only allowed inside 'quiz'")
+        if directive_type == "q" and parent != "questionnaire":
+            issues.append("'q' directives are only allowed inside 'questionnaire'")
         if parent == "book" and directive_type != "page":
             issues.append(f"'{directive_type}' directives are not allowed inside 'book'")
         if parent == "quiz" and directive_type != "question":
             issues.append(f"'{directive_type}' directives are not allowed inside 'quiz'")
+        if parent == "questionnaire" and directive_type != "q":
+            issues.append(f"'{directive_type}' directives are not allowed inside 'questionnaire'")
         stack.append((directive_type, match.group("fence")))
     return issues
 

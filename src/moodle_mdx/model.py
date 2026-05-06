@@ -37,6 +37,9 @@ class MoodleItem:
     pages: list[dict[str, Any]] = field(default_factory=list)
     questions: list[QuestionModel] = field(default_factory=list)
     files: list[dict[str, Any]] = field(default_factory=list)
+    options: list[dict[str, Any]] = field(default_factory=list)
+    columns: list[dict[str, Any]] = field(default_factory=list)
+    survey_questions: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)

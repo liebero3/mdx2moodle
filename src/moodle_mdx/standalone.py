@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import json
 import mimetypes
 import tarfile
 import xml.etree.ElementTree as ET
@@ -112,6 +113,8 @@ def _moodle_backup_xml(manifest: dict[str, Any]) -> bytes:
         _text(node, "sectionid", str(section["sectionid"]))
         _text(node, "title", _backup_section_title(section))
         _text(node, "directory", f"sections/section_{section['sectionid']}")
+        _text(node, "parentcmid", str(section.get("parentcmid") or ""))
+        _text(node, "modname", str(section.get("parent_modname") or ""))
     backup_settings = ET.SubElement(info, "settings")
     _append_backup_settings(backup_settings, manifest)
     return _xml_bytes(root)
@@ -150,7 +153,16 @@ def _append_backup_settings(parent: ET.Element, manifest: dict[str, Any]) -> Non
         for item in section.get("items", []):
             activity_key = f"{item['type']}_{item['moduleid']}"
             _backup_setting(parent, "activity", f"{activity_key}_included", "1", target=activity_key)
-            _backup_setting(parent, "activity", f"{activity_key}_userinfo", "0", target=activity_key)
+            _backup_setting(parent, "activity", f"{activity_key}_userinfo", _activity_userinfo(item), target=activity_key)
+
+
+def _activity_userinfo(item: dict[str, Any]) -> str:
+    if item.get("type") != "board":
+        return "0"
+    for column in item.get("columns", []):
+        if column.get("notes"):
+            return "1"
+    return "0"
 
 
 def _backup_setting(
@@ -227,8 +239,8 @@ def _section_xml(section: dict[str, Any]) -> bytes:
     _text(root, "sequence", ",".join(str(item["moduleid"]) for item in section.get("items", [])))
     _text(root, "visible", "1")
     _text(root, "availabilityjson", "$@NULL@$")
-    _text(root, "component", "$@NULL@$")
-    _text(root, "itemid", "$@NULL@$")
+    _text(root, "component", str(section.get("component") or "$@NULL@$"))
+    _text(root, "itemid", str(section.get("itemid") or "$@NULL@$"))
     _text(root, "timemodified", TIMESTAMP)
     return _xml_bytes(root)
 
@@ -254,7 +266,7 @@ def _module_xml(section: dict[str, Any], item: dict[str, Any]) -> bytes:
     _text(root, "completionview", "0")
     _text(root, "completionexpected", "0")
     _text(root, "availability", "$@NULL@$")
-    _text(root, "showdescription", "0" if item["type"] == "forum" else "1")
+    _text(root, "showdescription", "0" if item["type"] in {"forum", "subsection", "board"} else "1")
     _text(root, "downloadcontent", "1")
     _text(root, "lang", "")
     ET.SubElement(root, "tags")
@@ -305,6 +317,23 @@ def _activity_xml(item: dict[str, Any], file_pool: "_FilePool", source_base: Pat
     if item["type"] == "forum":
         forum = ET.SubElement(root, "forum", {"id": activity_id})
         _render_forum(forum, item)
+        return _xml_bytes(root)
+    if item["type"] == "subsection":
+        subsection = ET.SubElement(root, "subsection", {"id": activity_id})
+        _text(subsection, "name", str(item.get("title") or ""))
+        _text(subsection, "timemodified", TIMESTAMP)
+        return _xml_bytes(root)
+    if item["type"] == "choice":
+        choice = ET.SubElement(root, "choice", {"id": activity_id})
+        _render_choice(choice, item)
+        return _xml_bytes(root)
+    if item["type"] == "questionnaire":
+        questionnaire = ET.SubElement(root, "questionnaire", {"id": activity_id})
+        _render_questionnaire(questionnaire, item)
+        return _xml_bytes(root)
+    if item["type"] == "board":
+        board = ET.SubElement(root, "board", {"id": activity_id})
+        _render_board(board, item, activity_id)
         return _xml_bytes(root)
     if item["type"] == "folder":
         folder = ET.SubElement(root, "folder", {"id": activity_id})
@@ -578,6 +607,296 @@ def _render_forum(root: ET.Element, item: dict[str, Any]) -> None:
         ET.SubElement(root, tag)
 
 
+def _render_choice(root: ET.Element, item: dict[str, Any]) -> None:
+    settings = item.get("settings", {})
+    _text(root, "name", str(item.get("title") or ""))
+    _text(root, "intro", str(item.get("content_html") or ""))
+    _text(root, "introformat", "1")
+    for key, value in {
+        "publish": _scalar(settings.get("publish", 0)),
+        "showresults": _scalar(settings.get("showresults", 0)),
+        "display": _scalar(settings.get("display", 0)),
+        "allowupdate": _scalar(settings.get("allowupdate", True)),
+        "allowmultiple": _scalar(settings.get("allowmultiple", True)),
+        "showunanswered": _scalar(settings.get("showunanswered", True)),
+        "limitanswers": _scalar(settings.get("limitanswers", True)),
+        "timeopen": _scalar(settings.get("timeopen", 0)),
+        "timeclose": _scalar(settings.get("timeclose", 0)),
+        "timemodified": TIMESTAMP,
+        "completionsubmit": _scalar(settings.get("completionsubmit", False)),
+        "showpreview": _scalar(settings.get("showpreview", True)),
+        "includeinactive": _scalar(settings.get("includeinactive", False)),
+        "showavailable": _scalar(settings.get("showavailable", True)),
+    }.items():
+        _text(root, key, value)
+    options = ET.SubElement(root, "options")
+    for index, option in enumerate(item.get("options", []), start=1):
+        option_node = ET.SubElement(options, "option", {"id": str(8000 + index)})
+        _text(option_node, "text", str(option.get("text") or ""))
+        _text(option_node, "maxanswers", _scalar(option.get("maxanswers", index)))
+        _text(option_node, "timemodified", TIMESTAMP)
+    ET.SubElement(root, "answers")
+
+
+def _render_questionnaire(root: ET.Element, item: dict[str, Any]) -> None:
+    settings = item.get("settings", {})
+    title = str(item.get("title") or "")
+    _text(root, "course", COURSE_ID)
+    _text(root, "name", title)
+    _text(root, "intro", str(item.get("content_html") or ""))
+    _text(root, "introformat", "1")
+    _text(root, "qtype", _scalar(settings.get("qtype", 1)))
+    _text(root, "respondenttype", str(settings.get("respondenttype", "fullname")))
+    _text(root, "resp_eligible", str(settings.get("resp_eligible", "all")))
+    _text(root, "resp_view", _scalar(settings.get("resp_view", 2)))
+    _text(root, "notifications", _scalar(settings.get("notifications", 2)))
+    _text(root, "opendate", _scalar(settings.get("opendate", 0)))
+    _text(root, "closedate", _scalar(settings.get("closedate", 0)))
+    _text(root, "resume", _scalar(settings.get("resume", True)))
+    _text(root, "navigate", _scalar(settings.get("navigate", True)))
+    _text(root, "grade", _scalar(settings.get("grade", 0)))
+    _text(root, "sid", _scalar(settings.get("sid", 1)))
+    _text(root, "timemodified", TIMESTAMP)
+    _text(root, "completionsubmit", _scalar(settings.get("completionsubmit", False)))
+    _text(root, "autonum", _scalar(settings.get("autonum", 3)))
+    _text(root, "removeafter", _scalar(settings.get("removeafter", 0)))
+    surveys = ET.SubElement(root, "surveys")
+    survey = ET.SubElement(surveys, "survey", {"id": _scalar(settings.get("sid", 1))})
+    _text(survey, "name", title)
+    _text(survey, "courseid", COURSE_ID)
+    _text(survey, "realm", str(settings.get("realm", "private")))
+    _text(survey, "status", _scalar(settings.get("status", 0)))
+    _text(survey, "title", title)
+    _text(survey, "email", str(settings.get("email", "")))
+    _text(survey, "subtitle", str(settings.get("subtitle", "")))
+    _text(survey, "info", str(settings.get("survey_info", settings.get("info", ""))))
+    _text(survey, "theme", str(settings.get("theme", "")))
+    _text(survey, "thanks_page", str(settings.get("thanks_page", "")))
+    _text(survey, "thank_head", str(settings.get("thank_head", "")))
+    _text(survey, "thank_body", str(settings.get("thank_body", "")))
+    _text(survey, "feedbacksections", _scalar(settings.get("feedbacksections", 0)))
+    _text(survey, "feedbacknotes", "")
+    _text(survey, "feedbackscores", _scalar(settings.get("feedbackscores", 0)))
+    _text(survey, "chart_type", str(settings.get("chart_type", "$@NULL@$")))
+    questions = ET.SubElement(survey, "questions")
+    survey_id = _scalar(settings.get("sid", 1))
+    survey_questions = item.get("survey_questions", [])
+    question_ids, choice_ids = _questionnaire_dependency_maps(survey_questions)
+    for index, question in enumerate(survey_questions, start=1):
+        _render_questionnaire_question(questions, question, index, survey_id, question_ids, choice_ids)
+    ET.SubElement(survey, "fb_sections")
+    ET.SubElement(root, "responses")
+
+
+QUESTIONNAIRE_TYPE_IDS = {
+    "yesno": 1,
+    "textarea": 2,
+    "text": 3,
+    "radio": 4,
+    "checkbox": 5,
+    "dropdown": 6,
+    "rate": 8,
+    "date": 9,
+    "slider": 11,
+    "pagebreak": 99,
+    "sectiontext": 100,
+    "label": 100,
+}
+
+
+def _render_questionnaire_question(
+    parent: ET.Element,
+    question: dict[str, Any],
+    index: int,
+    survey_id: str,
+    question_ids: dict[str, str],
+    choice_ids: dict[tuple[str, str], str],
+) -> None:
+    question_id = str(9000 + index)
+    node = ET.SubElement(parent, "question", {"id": question_id})
+    qtype = str(question.get("type") or "text")
+    _text(node, "surveyid", survey_id)
+    _text(node, "name", str(question.get("name") or "$@NULL@$"))
+    _text(node, "type_id", str(QUESTIONNAIRE_TYPE_IDS.get(qtype, qtype)))
+    _text(node, "result_id", "$@NULL@$")
+    _text(node, "length", _scalar(question.get("length", _questionnaire_default_length(qtype))))
+    _text(node, "precise", _scalar(question.get("precise", _questionnaire_default_precise(qtype))))
+    _text(node, "position", _scalar(question.get("position", index)))
+    _text(node, "content", str(question.get("content") or ("break" if qtype == "pagebreak" else "")))
+    _text(node, "required", "y" if question.get("required", False) else "n")
+    _text(node, "deleted", str(question.get("deleted", "n")))
+    _text(node, "extradata", _questionnaire_extradata(question, qtype))
+    choices = ET.SubElement(node, "quest_choices")
+    for choice_index, choice in enumerate(question.get("choices", []), start=1):
+        choice_node = ET.SubElement(choices, "quest_choice", {"id": str(9100 + index * 100 + choice_index)})
+        _text(choice_node, "question_id", question_id)
+        _text(choice_node, "content", str(choice.get("content") or ""))
+        _text(choice_node, "value", _scalar(choice.get("value", "$@NULL@$")))
+    dependencies = ET.SubElement(node, "quest_dependencies")
+    _render_questionnaire_dependencies(dependencies, question, index, question_id, survey_id, question_ids, choice_ids)
+
+
+def _questionnaire_dependency_maps(questions: list[dict[str, Any]]) -> tuple[dict[str, str], dict[tuple[str, str], str]]:
+    question_ids: dict[str, str] = {}
+    choice_ids: dict[tuple[str, str], str] = {}
+    for index, question in enumerate(questions, start=1):
+        question_id = str(9000 + index)
+        refs = _questionnaire_question_refs(question, index)
+        for ref in refs:
+            question_ids[ref] = question_id
+        for choice_index, choice in enumerate(question.get("choices", []), start=1):
+            choice_id = str(9100 + index * 100 + choice_index)
+            for question_ref in refs:
+                for choice_ref in _questionnaire_choice_refs(choice, choice_index):
+                    choice_ids[(question_ref, choice_ref)] = choice_id
+    return question_ids, choice_ids
+
+
+def _questionnaire_question_refs(question: dict[str, Any], index: int) -> set[str]:
+    refs = {
+        str(question.get("id") or ""),
+        str(question.get("name") or ""),
+        str(question.get("position") or index),
+        f"q{index}",
+    }
+    return {ref for ref in refs if ref}
+
+
+def _questionnaire_choice_refs(choice: dict[str, Any], index: int) -> set[str]:
+    settings = choice.get("settings", {})
+    refs = {
+        str(choice.get("id") or ""),
+        str(choice.get("value") or ""),
+        str(choice.get("content") or ""),
+        str(settings.get("id") or ""),
+        str(settings.get("value") or ""),
+        str(index),
+        f"c{index}",
+    }
+    return {ref for ref in refs if ref}
+
+
+def _render_questionnaire_dependencies(
+    parent: ET.Element,
+    question: dict[str, Any],
+    index: int,
+    question_id: str,
+    survey_id: str,
+    question_ids: dict[str, str],
+    choice_ids: dict[tuple[str, str], str],
+) -> None:
+    settings = question.get("settings", {})
+    depends_on = question.get("depends_on", settings.get("depends_on", ""))
+    if not depends_on:
+        return
+    dependencies = _split_dependency_values(depends_on)
+    joins = _split_dependency_values(question.get("depends_join", settings.get("depends_join", "and")))
+    logics = _split_dependency_values(question.get("depends_logic", settings.get("depends_logic", 1)))
+    for dependency_index, dependency in enumerate(dependencies, start=1):
+        question_ref, separator, choice_ref = dependency.partition(":")
+        if not separator or not question_ref or not choice_ref:
+            raise ValueError(f"Invalid questionnaire dependency {dependency!r}; expected 'question_id:choice_id'")
+        dependquestionid = question_ids.get(question_ref)
+        if dependquestionid is None:
+            raise ValueError(f"Unknown questionnaire dependency question id: {question_ref}")
+        dependchoiceid = choice_ids.get((question_ref, choice_ref))
+        if dependchoiceid is None:
+            raise ValueError(f"Unknown questionnaire dependency choice id: {question_ref}:{choice_ref}")
+        dependency_node = ET.SubElement(parent, "quest_dependency", {"id": str(9200 + index * 100 + dependency_index)})
+        _text(dependency_node, "dependquestionid", dependquestionid)
+        _text(dependency_node, "dependchoiceid", dependchoiceid)
+        _text(dependency_node, "dependlogic", str(logics[min(dependency_index - 1, len(logics) - 1)]))
+        _text(dependency_node, "questionid", question_id)
+        _text(dependency_node, "surveyid", survey_id)
+        _text(dependency_node, "dependandor", str(joins[min(dependency_index - 1, len(joins) - 1)]))
+
+
+def _split_dependency_values(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [part.strip() for part in str(value).split(",") if part.strip()]
+
+
+def _questionnaire_default_length(qtype: str) -> int:
+    if qtype == "text":
+        return 20
+    if qtype == "textarea":
+        return 20
+    return 0
+
+
+def _questionnaire_default_precise(qtype: str) -> int:
+    if qtype == "textarea":
+        return 25
+    return 0
+
+
+def _questionnaire_extradata(question: dict[str, Any], qtype: str) -> str:
+    if question.get("extradata") is not None:
+        return str(question["extradata"])
+    if qtype == "rate":
+        return "[]"
+    if qtype == "pagebreak":
+        return "$@NULL@$"
+    if qtype == "slider":
+        settings = question.get("settings", {})
+        data = {
+            "minrange": str(question.get("minrange", settings.get("minrange", 0))),
+            "maxrange": str(question.get("maxrange", settings.get("maxrange", 10))),
+            "startingvalue": str(question.get("startingvalue", settings.get("startingvalue", 0))),
+            "stepvalue": str(question.get("stepvalue", settings.get("stepvalue", 1))),
+            "leftlabel": str(question.get("leftlabel", settings.get("leftlabel", ""))),
+            "rightlabel": str(question.get("rightlabel", settings.get("rightlabel", ""))),
+            "centerlabel": str(question.get("centerlabel", settings.get("centerlabel", ""))),
+        }
+        return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    return "0"
+
+
+def _render_board(root: ET.Element, item: dict[str, Any], board_id: str) -> None:
+    settings = item.get("settings", {})
+    _text(root, "course", COURSE_ID)
+    _text(root, "name", str(item.get("title") or ""))
+    _text(root, "timemodified", TIMESTAMP)
+    _text(root, "intro", str(item.get("content_html") or ""))
+    _text(root, "introformat", "1")
+    _text(root, "historyid", _scalar(settings.get("historyid", int(board_id) + 750)))
+    _text(root, "background_color", str(settings.get("background_color", "bdb7ff")))
+    _text(root, "addrating", _scalar(settings.get("addrating", 0)))
+    _text(root, "hideheaders", _scalar(settings.get("hideheaders", 0)))
+    _text(root, "sortby", _scalar(settings.get("sortby", 3)))
+    _text(root, "postby", _scalar(settings.get("postby", 0)))
+    _text(root, "userscanedit", _scalar(settings.get("userscanedit", 0)))
+    _text(root, "singleusermode", _scalar(settings.get("singleusermode", 0)))
+    _text(root, "completionnotes", _scalar(settings.get("completionnotes", 0)))
+    _text(root, "embed", _scalar(settings.get("embed", 0)))
+    columns = ET.SubElement(root, "columns")
+    for index, column in enumerate(item.get("columns", []), start=1):
+        column_id = str(8100 + index)
+        column_node = ET.SubElement(columns, "column", {"id": column_id})
+        _text(column_node, "boardid", board_id)
+        _text(column_node, "name", str(column.get("name") or ""))
+        _text(column_node, "sortorder", _scalar(column.get("sortorder", index)))
+        notes = ET.SubElement(column_node, "notes")
+        for note_index, note in enumerate(column.get("notes", []), start=1):
+            note_node = ET.SubElement(notes, "note", {"id": str(8200 + index * 100 + note_index)})
+            _text(note_node, "columnid", column_id)
+            _text(note_node, "ownerid", _scalar(note.get("ownerid", 2)))
+            _text(note_node, "userid", _scalar(note.get("userid", 2)))
+            _text(note_node, "groupid", _scalar(note.get("groupid", "")))
+            _text(note_node, "content", str(note.get("content") or ""))
+            _text(note_node, "heading", str(note.get("heading") or ""))
+            _text(note_node, "type", _scalar(note.get("type", 0)))
+            _text(note_node, "info", str(note.get("info") or ""))
+            _text(note_node, "url", str(note.get("url") or ""))
+            _text(note_node, "filename", str(note.get("filename") or ""))
+            _text(note_node, "timecreated", TIMESTAMP)
+            _text(note_node, "sortorder", _scalar(note.get("sortorder", note_index - 1)))
+            _text(note_node, "deleted", _scalar(note.get("deleted", 0)))
+            ET.SubElement(note_node, "comments")
+            ET.SubElement(note_node, "ratings")
+
+
 class _FilePool:
     def __init__(self) -> None:
         self._records: list[dict[str, str]] = []
@@ -621,7 +940,7 @@ class _FilePool:
                 "mimetype": _mimetype(filename),
                 "source": filename,
                 "userid": "2",
-                "author": "mdx2moodle",
+                "author": "Moodle MDX",
                 "license": "allrightsreserved",
             }
         )

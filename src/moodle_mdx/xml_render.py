@@ -33,6 +33,10 @@ def render_template_xml_overrides(
             _set_text(root, "number", str(section["index"]))
             _set_text(root, "name", section.get("title") or "$@NULL@$")
             _set_text(root, "summary", section.get("summary_html") or "")
+            if "component" in section:
+                _set_text(root, "component", str(section["component"]))
+            if "itemid" in section:
+                _set_text(root, "itemid", str(section["itemid"]))
             sequence = ",".join(
                 str(item["moduleid"])
                 for item in section.get("items", [])
@@ -117,6 +121,39 @@ def render_template_xml_overrides(
                     if "content_html" in item:
                         _set_text(forum_root, "forum/intro", str(item["content_html"]))
                     overrides[str(forum_path)] = _xml_bytes(forum_root)
+                    continue
+                if item.get("type") == "subsection":
+                    subsection_path = item.get("source_path")
+                    if not subsection_path:
+                        continue
+                    subsection_root = _read_xml(archive, str(subsection_path))
+                    _set_text(subsection_root, "subsection/name", str(item.get("title") or ""))
+                    overrides[str(subsection_path)] = _xml_bytes(subsection_root)
+                    continue
+                if item.get("type") == "choice":
+                    choice_path = item.get("source_path")
+                    if not choice_path:
+                        continue
+                    choice_root = _read_xml(archive, str(choice_path))
+                    _render_choice_xml(choice_root, item)
+                    overrides[str(choice_path)] = _xml_bytes(choice_root)
+                    continue
+                if item.get("type") == "questionnaire":
+                    questionnaire_path = item.get("source_path")
+                    if not questionnaire_path:
+                        continue
+                    questionnaire_root = _read_xml(archive, str(questionnaire_path))
+                    _render_questionnaire_xml(questionnaire_root, item)
+                    overrides[str(questionnaire_path)] = _xml_bytes(questionnaire_root)
+                    continue
+                if item.get("type") == "board":
+                    board_path = item.get("source_path")
+                    if not board_path:
+                        continue
+                    board_root = _read_xml(archive, str(board_path))
+                    _render_board_xml(board_root, item)
+                    overrides[str(board_path)] = _xml_bytes(board_root)
+                    continue
         if question_updates:
             question_root = _read_xml(archive, question_source_path)
             _replace_questions(question_root, question_updates)
@@ -186,6 +223,10 @@ def _render_moodle_backup_xml_override(archive: tarfile.TarFile, manifest: dict[
         if section is None:
             continue
         _set_text(section_node, "title", _backup_section_title(section))
+        if section_node.find("parentcmid") is not None:
+            _set_text(section_node, "parentcmid", str(section.get("parentcmid") or ""))
+        if section_node.find("modname") is not None:
+            _set_text(section_node, "modname", str(section.get("parent_modname") or ""))
 
     items_by_moduleid = {
         str(item.get("moduleid")): item
@@ -200,6 +241,15 @@ def _render_moodle_backup_xml_override(archive: tarfile.TarFile, manifest: dict[
         _set_text(activity_node, "sectionid", str(item.get("sectionid") or ""))
         _set_text(activity_node, "modulename", str(item.get("type") or ""))
         _set_text(activity_node, "title", str(item.get("title") or ""))
+    for setting_node in root.findall("information/settings/setting"):
+        name = setting_node.findtext("name", "")
+        if not name.endswith("_userinfo"):
+            continue
+        activity_key = name.removesuffix("_userinfo")
+        item = _item_by_activity_key(items_by_moduleid.values(), activity_key)
+        if item is None:
+            continue
+        _set_text(setting_node, "value", _activity_userinfo(item))
     return _xml_bytes(root)
 
 
@@ -229,6 +279,24 @@ def _render_assign_xml(root: ET.Element, item: dict[str, Any]) -> None:
             _set_assign_plugin_enabled(root, plugin, subtype, bool(settings[setting_key]))
 
 
+def _item_by_activity_key(items: object, activity_key: str) -> dict[str, Any] | None:
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if f"{item.get('type')}_{item.get('moduleid')}" == activity_key:
+            return item
+    return None
+
+
+def _activity_userinfo(item: dict[str, Any]) -> str:
+    if item.get("type") != "board":
+        return "0"
+    for column in item.get("columns", []):
+        if column.get("notes"):
+            return "1"
+    return "0"
+
+
 def _set_assign_plugin_enabled(root: ET.Element, plugin: str, subtype: str, enabled: bool) -> None:
     for config in root.findall("assign/plugin_configs/plugin_config"):
         if (
@@ -239,6 +307,289 @@ def _set_assign_plugin_enabled(root: ET.Element, plugin: str, subtype: str, enab
             _set_text(config, "value", "1" if enabled else "0")
             return
     raise ValueError(f"Assign plugin config {subtype}/{plugin}/enabled not found")
+
+
+def _render_choice_xml(root: ET.Element, item: dict[str, Any]) -> None:
+    settings = item.get("settings", {})
+    _set_text(root, "choice/name", str(item.get("title") or ""))
+    if "content_html" in item:
+        _set_text(root, "choice/intro", str(item["content_html"]))
+    for key in (
+        "publish",
+        "showresults",
+        "display",
+        "allowupdate",
+        "allowmultiple",
+        "showunanswered",
+        "limitanswers",
+        "timeopen",
+        "timeclose",
+        "completionsubmit",
+        "showpreview",
+        "includeinactive",
+        "showavailable",
+    ):
+        if key in settings:
+            _set_text(root, f"choice/{key}", _moodle_scalar(settings[key]))
+    option_nodes = root.findall("choice/options/option")
+    options = item.get("options", [])
+    if options and len(options) != len(option_nodes):
+        raise ValueError(
+            f"Choice option count changed from {len(option_nodes)} to {len(options)}; template mode keeps existing options"
+        )
+    for node, option in zip(option_nodes, options):
+        _set_text(node, "text", str(option.get("text") or ""))
+        _set_text(node, "maxanswers", _moodle_scalar(option.get("maxanswers", 0)))
+
+
+def _render_questionnaire_xml(root: ET.Element, item: dict[str, Any]) -> None:
+    settings = item.get("settings", {})
+    title = str(item.get("title") or "")
+    _set_text(root, "questionnaire/name", title)
+    _set_text(root, "questionnaire/surveys/survey/name", title)
+    _set_text(root, "questionnaire/surveys/survey/title", title)
+    if "content_html" in item:
+        _set_text(root, "questionnaire/intro", str(item["content_html"]))
+    for source, target in {
+        "survey_info": "info",
+        "info": "info",
+        "thanks_page": "thanks_page",
+        "thank_head": "thank_head",
+        "thank_body": "thank_body",
+    }.items():
+        if source in settings:
+            _set_text(root, f"questionnaire/surveys/survey/{target}", str(settings[source]))
+    for key in (
+        "qtype",
+        "respondenttype",
+        "resp_eligible",
+        "resp_view",
+        "notifications",
+        "opendate",
+        "closedate",
+        "resume",
+        "navigate",
+        "grade",
+        "sid",
+        "completionsubmit",
+        "autonum",
+        "removeafter",
+    ):
+        if key in settings:
+            _set_text(root, f"questionnaire/{key}", _moodle_scalar(settings[key]))
+    questions_node = root.find("questionnaire/surveys/survey/questions")
+    if questions_node is not None and item.get("survey_questions"):
+        questions_node.clear()
+        survey = root.find("questionnaire/surveys/survey")
+        survey_id = str(settings.get("sid") or (survey.get("id") if survey is not None else "1"))
+        survey_questions = item.get("survey_questions", [])
+        question_ids, choice_ids = _questionnaire_dependency_maps(survey_questions)
+        for index, question in enumerate(survey_questions, start=1):
+            _add_questionnaire_question(questions_node, question, index, survey_id, question_ids, choice_ids)
+
+
+QUESTIONNAIRE_TYPE_IDS = {
+    "yesno": 1,
+    "textarea": 2,
+    "text": 3,
+    "radio": 4,
+    "checkbox": 5,
+    "dropdown": 6,
+    "rate": 8,
+    "date": 9,
+    "slider": 11,
+    "pagebreak": 99,
+    "sectiontext": 100,
+    "label": 100,
+}
+
+
+def _add_questionnaire_question(
+    parent: ET.Element,
+    question: dict[str, Any],
+    index: int,
+    survey_id: str,
+    question_ids: dict[str, str],
+    choice_ids: dict[tuple[str, str], str],
+) -> None:
+    question_id = str(9000 + index)
+    node = ET.SubElement(parent, "question", {"id": question_id})
+    qtype = str(question.get("type") or "text")
+    _add_text(node, "surveyid", survey_id)
+    _add_text(node, "name", str(question.get("name") or "$@NULL@$"))
+    _add_text(node, "type_id", str(QUESTIONNAIRE_TYPE_IDS.get(qtype, qtype)))
+    _add_text(node, "result_id", "$@NULL@$")
+    _add_text(node, "length", _moodle_scalar(question.get("length", 0)))
+    _add_text(node, "precise", _moodle_scalar(question.get("precise", 0)))
+    _add_text(node, "position", _moodle_scalar(question.get("position", index)))
+    _add_text(node, "content", str(question.get("content") or ("break" if qtype == "pagebreak" else "")))
+    _add_text(node, "required", "y" if question.get("required", False) else "n")
+    _add_text(node, "deleted", str(question.get("deleted", "n")))
+    _add_text(node, "extradata", _questionnaire_extradata(question, qtype))
+    choices = ET.SubElement(node, "quest_choices")
+    for choice_index, choice in enumerate(question.get("choices", []), start=1):
+        choice_node = ET.SubElement(choices, "quest_choice", {"id": str(9100 + index * 100 + choice_index)})
+        _add_text(choice_node, "question_id", question_id)
+        _add_text(choice_node, "content", str(choice.get("content") or ""))
+        _add_text(choice_node, "value", _moodle_scalar(choice.get("value", "$@NULL@$")))
+    dependencies = ET.SubElement(node, "quest_dependencies")
+    _add_questionnaire_dependencies(dependencies, question, index, question_id, survey_id, question_ids, choice_ids)
+
+
+def _questionnaire_dependency_maps(questions: list[dict[str, Any]]) -> tuple[dict[str, str], dict[tuple[str, str], str]]:
+    question_ids: dict[str, str] = {}
+    choice_ids: dict[tuple[str, str], str] = {}
+    for index, question in enumerate(questions, start=1):
+        question_id = str(9000 + index)
+        refs = _questionnaire_question_refs(question, index)
+        for ref in refs:
+            question_ids[ref] = question_id
+        for choice_index, choice in enumerate(question.get("choices", []), start=1):
+            choice_id = str(9100 + index * 100 + choice_index)
+            for question_ref in refs:
+                for choice_ref in _questionnaire_choice_refs(choice, choice_index):
+                    choice_ids[(question_ref, choice_ref)] = choice_id
+    return question_ids, choice_ids
+
+
+def _questionnaire_question_refs(question: dict[str, Any], index: int) -> set[str]:
+    refs = {
+        str(question.get("id") or ""),
+        str(question.get("name") or ""),
+        str(question.get("position") or index),
+        f"q{index}",
+    }
+    return {ref for ref in refs if ref}
+
+
+def _questionnaire_choice_refs(choice: dict[str, Any], index: int) -> set[str]:
+    settings = choice.get("settings", {})
+    refs = {
+        str(choice.get("id") or ""),
+        str(choice.get("value") or ""),
+        str(choice.get("content") or ""),
+        str(settings.get("id") or ""),
+        str(settings.get("value") or ""),
+        str(index),
+        f"c{index}",
+    }
+    return {ref for ref in refs if ref}
+
+
+def _add_questionnaire_dependencies(
+    parent: ET.Element,
+    question: dict[str, Any],
+    index: int,
+    question_id: str,
+    survey_id: str,
+    question_ids: dict[str, str],
+    choice_ids: dict[tuple[str, str], str],
+) -> None:
+    settings = question.get("settings", {})
+    depends_on = question.get("depends_on", settings.get("depends_on", ""))
+    if not depends_on:
+        return
+    dependencies = _split_dependency_values(depends_on)
+    joins = _split_dependency_values(question.get("depends_join", settings.get("depends_join", "and")))
+    logics = _split_dependency_values(question.get("depends_logic", settings.get("depends_logic", 1)))
+    for dependency_index, dependency in enumerate(dependencies, start=1):
+        question_ref, separator, choice_ref = dependency.partition(":")
+        if not separator or not question_ref or not choice_ref:
+            raise ValueError(f"Invalid questionnaire dependency {dependency!r}; expected 'question_id:choice_id'")
+        dependquestionid = question_ids.get(question_ref)
+        if dependquestionid is None:
+            raise ValueError(f"Unknown questionnaire dependency question id: {question_ref}")
+        dependchoiceid = choice_ids.get((question_ref, choice_ref))
+        if dependchoiceid is None:
+            raise ValueError(f"Unknown questionnaire dependency choice id: {question_ref}:{choice_ref}")
+        dependency_node = ET.SubElement(parent, "quest_dependency", {"id": str(9200 + index * 100 + dependency_index)})
+        _add_text(dependency_node, "dependquestionid", dependquestionid)
+        _add_text(dependency_node, "dependchoiceid", dependchoiceid)
+        _add_text(dependency_node, "dependlogic", str(logics[min(dependency_index - 1, len(logics) - 1)]))
+        _add_text(dependency_node, "questionid", question_id)
+        _add_text(dependency_node, "surveyid", survey_id)
+        _add_text(dependency_node, "dependandor", str(joins[min(dependency_index - 1, len(joins) - 1)]))
+
+
+def _split_dependency_values(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [part.strip() for part in str(value).split(",") if part.strip()]
+
+
+def _questionnaire_extradata(question: dict[str, Any], qtype: str) -> str:
+    if question.get("extradata") is not None:
+        return str(question["extradata"])
+    if qtype == "rate":
+        return "[]"
+    if qtype == "pagebreak":
+        return "$@NULL@$"
+    if qtype == "slider":
+        import json
+
+        settings = question.get("settings", {})
+        data = {
+            "minrange": str(question.get("minrange", settings.get("minrange", 0))),
+            "maxrange": str(question.get("maxrange", settings.get("maxrange", 10))),
+            "startingvalue": str(question.get("startingvalue", settings.get("startingvalue", 0))),
+            "stepvalue": str(question.get("stepvalue", settings.get("stepvalue", 1))),
+            "leftlabel": str(question.get("leftlabel", settings.get("leftlabel", ""))),
+            "rightlabel": str(question.get("rightlabel", settings.get("rightlabel", ""))),
+            "centerlabel": str(question.get("centerlabel", settings.get("centerlabel", ""))),
+        }
+        return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    return "0"
+
+
+def _render_board_xml(root: ET.Element, item: dict[str, Any]) -> None:
+    settings = item.get("settings", {})
+    _set_text(root, "board/name", str(item.get("title") or ""))
+    if "content_html" in item:
+        _set_text(root, "board/intro", str(item["content_html"]))
+    for key in (
+        "background_color",
+        "addrating",
+        "hideheaders",
+        "sortby",
+        "postby",
+        "userscanedit",
+        "singleusermode",
+        "completionnotes",
+        "embed",
+    ):
+        if key in settings:
+            _set_text(root, f"board/{key}", _moodle_scalar(settings[key]))
+    column_nodes = root.findall("board/columns/column")
+    columns = item.get("columns", [])
+    if columns and len(columns) != len(column_nodes):
+        raise ValueError(
+            f"Board column count changed from {len(column_nodes)} to {len(columns)}; template mode keeps existing columns"
+        )
+    for node, column in zip(column_nodes, columns):
+        _set_text(node, "name", str(column.get("name") or ""))
+        if "sortorder" in column:
+            _set_text(node, "sortorder", _moodle_scalar(column["sortorder"]))
+        notes = node.find("notes")
+        if notes is None:
+            notes = ET.SubElement(node, "notes")
+        notes.clear()
+        for index, note in enumerate(column.get("notes", []), start=1):
+            note_node = ET.SubElement(notes, "note", {"id": str(8200 + index)})
+            _add_text(note_node, "columnid", node.get("id") or "")
+            _add_text(note_node, "ownerid", _moodle_scalar(note.get("ownerid", 2)))
+            _add_text(note_node, "userid", _moodle_scalar(note.get("userid", 2)))
+            _add_text(note_node, "groupid", _moodle_scalar(note.get("groupid", "")))
+            _add_text(note_node, "content", str(note.get("content") or ""))
+            _add_text(note_node, "heading", str(note.get("heading") or ""))
+            _add_text(note_node, "type", _moodle_scalar(note.get("type", 0)))
+            _add_text(note_node, "info", str(note.get("info") or ""))
+            _add_text(note_node, "url", str(note.get("url") or ""))
+            _add_text(note_node, "filename", str(note.get("filename") or ""))
+            _add_text(note_node, "timecreated", "0")
+            _add_text(note_node, "sortorder", _moodle_scalar(note.get("sortorder", index - 1)))
+            _add_text(note_node, "deleted", _moodle_scalar(note.get("deleted", 0)))
+            ET.SubElement(note_node, "comments")
+            ET.SubElement(note_node, "ratings")
 
 
 def _render_file_pool_overrides(

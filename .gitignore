@@ -27,6 +27,7 @@ dist/
 # Internal planning and scratch documentation
 /idee.md
 /sprints.md
+/docs/ideen/
 /fixtures/
 
 # Local-only scratch space for private templates/assets

@@ -33,11 +33,29 @@ def compare_mbz_semantics(expected: str | Path, actual: str | Path) -> CompareRe
             )
 
     expected_sections = [
-        (section["index"], section["title"], section["summary"], section["sequence"])
+        (
+            section["index"],
+            section["title"],
+            section["summary"],
+            section["sequence"],
+            section.get("component", ""),
+            section.get("itemid", ""),
+            section.get("parentcmid", ""),
+            section.get("modname", ""),
+        )
         for section in expected_report.sections
     ]
     actual_sections = [
-        (section["index"], section["title"], section["summary"], section["sequence"])
+        (
+            section["index"],
+            section["title"],
+            section["summary"],
+            section["sequence"],
+            section.get("component", ""),
+            section.get("itemid", ""),
+            section.get("parentcmid", ""),
+            section.get("modname", ""),
+        )
         for section in actual_report.sections
     ]
     if expected_sections != actual_sections:
@@ -165,6 +183,8 @@ def _backup_xml_fingerprint(path: str | Path) -> tuple[Any, ...]:
                 section.findtext("sectionid", ""),
                 section.findtext("title", ""),
                 section.findtext("directory", ""),
+                section.findtext("parentcmid", ""),
+                section.findtext("modname", ""),
             )
             for section in root.findall("information/contents/sections/section")
         ],
@@ -324,5 +344,151 @@ def _activity_xml_fingerprint(path: str | Path) -> dict[str, Any]:
                         root.findtext("forum/completionposts", ""),
                     )
                     continue
+                if parts[2] == "subsection.xml":
+                    root = ET.fromstring(data)
+                    digest[member.name] = (
+                        root.findtext("subsection/name", ""),
+                    )
+                    continue
+                if parts[2] == "choice.xml":
+                    root = ET.fromstring(data)
+                    digest[member.name] = (
+                        root.findtext("choice/name", ""),
+                        root.findtext("choice/intro", ""),
+                        root.findtext("choice/introformat", ""),
+                        root.findtext("choice/publish", ""),
+                        root.findtext("choice/showresults", ""),
+                        root.findtext("choice/display", ""),
+                        root.findtext("choice/allowupdate", ""),
+                        root.findtext("choice/allowmultiple", ""),
+                        root.findtext("choice/showunanswered", ""),
+                        root.findtext("choice/limitanswers", ""),
+                        root.findtext("choice/timeopen", ""),
+                        root.findtext("choice/timeclose", ""),
+                        root.findtext("choice/completionsubmit", ""),
+                        root.findtext("choice/showpreview", ""),
+                        root.findtext("choice/includeinactive", ""),
+                        root.findtext("choice/showavailable", ""),
+                        tuple(
+                            (
+                                option.findtext("text", ""),
+                                option.findtext("maxanswers", ""),
+                            )
+                            for option in root.findall("choice/options/option")
+                        ),
+                    )
+                    continue
+                if parts[2] == "questionnaire.xml":
+                    root = ET.fromstring(data)
+                    digest[member.name] = (
+                        root.findtext("questionnaire/name", ""),
+                        root.findtext("questionnaire/intro", ""),
+                        root.findtext("questionnaire/introformat", ""),
+                        root.findtext("questionnaire/qtype", ""),
+                        root.findtext("questionnaire/respondenttype", ""),
+                        root.findtext("questionnaire/resp_eligible", ""),
+                        root.findtext("questionnaire/resp_view", ""),
+                        root.findtext("questionnaire/notifications", ""),
+                        root.findtext("questionnaire/opendate", ""),
+                        root.findtext("questionnaire/closedate", ""),
+                        root.findtext("questionnaire/resume", ""),
+                        root.findtext("questionnaire/navigate", ""),
+                        root.findtext("questionnaire/grade", ""),
+                        root.findtext("questionnaire/completionsubmit", ""),
+                        root.findtext("questionnaire/autonum", ""),
+                        root.findtext("questionnaire/removeafter", ""),
+                        tuple(
+                            (
+                                survey.findtext("name", ""),
+                                survey.findtext("realm", ""),
+                                survey.findtext("status", ""),
+                                survey.findtext("title", ""),
+                                survey.findtext("info", ""),
+                                survey.findtext("thanks_page", ""),
+                                survey.findtext("thank_head", ""),
+                                survey.findtext("thank_body", ""),
+                                survey.findtext("feedbacksections", ""),
+                                survey.findtext("feedbackscores", ""),
+                                survey.findtext("chart_type", ""),
+                            )
+                            for survey in root.findall("questionnaire/surveys/survey")
+                        ),
+                        tuple(
+                            (
+                                question.get("id", ""),
+                                _null_to_empty(question.findtext("name", "")),
+                                question.findtext("surveyid", ""),
+                                question.findtext("type_id", ""),
+                                question.findtext("result_id", ""),
+                                question.findtext("length", ""),
+                                question.findtext("precise", ""),
+                                question.findtext("position", ""),
+                                question.findtext("content", ""),
+                                question.findtext("required", ""),
+                                question.findtext("deleted", ""),
+                                question.findtext("extradata", ""),
+                                tuple(
+                                    (
+                                        dependency.findtext("dependquestionid", ""),
+                                        dependency.findtext("dependchoiceid", ""),
+                                        dependency.findtext("dependlogic", ""),
+                                        dependency.findtext("questionid", ""),
+                                        dependency.findtext("surveyid", ""),
+                                        dependency.findtext("dependandor", ""),
+                                    )
+                                    for dependency in question.findall("quest_dependencies/quest_dependency")
+                                ),
+                                tuple(
+                                    (
+                                        choice.findtext("content", ""),
+                                        _null_to_empty(choice.findtext("value", "")),
+                                    )
+                                    for choice in question.findall("quest_choices/quest_choice")
+                                ),
+                            )
+                            for question in root.findall("questionnaire/surveys/survey/questions/question")
+                        ),
+                    )
+                    continue
+                if parts[2] == "board.xml":
+                    root = ET.fromstring(data)
+                    digest[member.name] = (
+                        root.findtext("board/name", ""),
+                        root.findtext("board/intro", ""),
+                        root.findtext("board/introformat", ""),
+                        root.findtext("board/background_color", ""),
+                        root.findtext("board/addrating", ""),
+                        root.findtext("board/hideheaders", ""),
+                        root.findtext("board/sortby", ""),
+                        root.findtext("board/postby", ""),
+                        root.findtext("board/userscanedit", ""),
+                        root.findtext("board/singleusermode", ""),
+                        root.findtext("board/completionnotes", ""),
+                        root.findtext("board/embed", ""),
+                        tuple(
+                            (
+                                column.findtext("name", ""),
+                                column.findtext("sortorder", ""),
+                                tuple(
+                                    (
+                                        note.findtext("content", ""),
+                                        note.findtext("heading", ""),
+                                        note.findtext("type", ""),
+                                        note.findtext("sortorder", ""),
+                                        note.findtext("deleted", ""),
+                                    )
+                                    for note in column.findall("notes/note")
+                                ),
+                            )
+                            for column in root.findall("board/columns/column")
+                        ),
+                    )
+                    continue
                 digest[member.name] = hashlib.sha256(data).hexdigest()
     return dict(sorted(digest.items()))
+
+
+def _null_to_empty(value: str | None) -> str:
+    if value in {None, "$@NULL@$"}:
+        return ""
+    return value

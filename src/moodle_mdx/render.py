@@ -56,6 +56,7 @@ def _render_item(item: MoodleItem) -> dict[str, Any]:
         "module": "module_path",
         "file": "file_path",
         "questions": "question_source_path",
+        "target_section_id": "target_section_id",
     }.items():
         if source_key in item.attrs:
             rendered[target_key] = item.attrs[source_key]
@@ -84,6 +85,75 @@ def _render_item(item: MoodleItem) -> dict[str, Any]:
             }
             for file in item.files
         ]
+    if item.options:
+        rendered["options"] = [
+            {
+                "text": str(option.get("text") or ""),
+                **{
+                    key: value
+                    for key, value in option.items()
+                    if key != "text"
+                },
+            }
+            for option in item.options
+        ]
+    if item.columns:
+        rendered["columns"] = [
+            {
+                "name": str(column.get("text") or column.get("name") or ""),
+                "notes": [
+                    {
+                        "content": str(note.get("content") or ""),
+                        **{
+                            key: value
+                            for key, value in note.items()
+                            if key != "content"
+                        },
+                    }
+                    for note in column.get("notes", [])
+                ],
+                **{
+                    key: value
+                    for key, value in column.items()
+                    if key not in {"text", "name", "notes"}
+                },
+            }
+            for column in item.columns
+        ]
+    if item.survey_questions:
+        rendered["survey_questions"] = [
+            {
+                "id": str(question.get("id") or ""),
+                "type": str(question.get("type") or "text"),
+                "name": str(question.get("name") or ""),
+                "content": str(question.get("content") or ""),
+                "position": int(question.get("position", index)),
+                "required": bool(question.get("required", False)),
+                "length": int(question.get("length", 0)),
+                "precise": int(question.get("precise", 0)),
+                "deleted": str(question.get("deleted", "n")),
+                "extradata": question.get("extradata"),
+                "choices": [
+                    {
+                        "id": str(choice.get("id") or ""),
+                        "content": str(choice.get("content") or ""),
+                        "value": choice.get("value"),
+                        "settings": {
+                            key: value
+                            for key, value in choice.items()
+                            if key not in {"id", "content", "value"}
+                        },
+                    }
+                    for choice in question.get("choices", [])
+                ],
+                "settings": {
+                    key: value
+                    for key, value in question.items()
+                    if key not in {"id", "type", "name", "content", "position", "required", "length", "precise", "deleted", "extradata", "choices"}
+                },
+            }
+            for index, question in enumerate(item.survey_questions, start=1)
+        ]
     options = {
         key: value
         for key, value in item.attrs.items()
@@ -98,6 +168,7 @@ def _render_item(item: MoodleItem) -> dict[str, Any]:
             "moduleid",
             "sectionid",
             "visible",
+            "target_section_id",
         }
     }
     if options:
@@ -159,6 +230,7 @@ def _sectionid_from_model_id(section_id: str) -> str:
 
 def _assign_standalone_paths(manifest: dict[str, Any]) -> None:
     moduleid = 3000
+    subsection_items_by_target: dict[str, dict[str, Any]] = {}
     for section_index, section in enumerate(manifest.get("sections", [])):
         section["sectionid"] = str(2000 + section_index)
         for item in section.get("items", []):
@@ -171,3 +243,13 @@ def _assign_standalone_paths(manifest: dict[str, Any]) -> None:
             item["module_path"] = f"{directory}/module.xml"
             if item["type"] == "quiz":
                 item["question_source_path"] = "questions.xml"
+            if item["type"] == "subsection" and item.get("target_section_id"):
+                subsection_items_by_target[str(item["target_section_id"])] = item
+    for section in manifest.get("sections", []):
+        item = subsection_items_by_target.get(str(section.get("id")))
+        if item is None:
+            continue
+        section["parentcmid"] = str(item["moduleid"])
+        section["parent_modname"] = "subsection"
+        section["component"] = "mod_subsection"
+        section["itemid"] = str(4000 + int(item["moduleid"]) - 3000)

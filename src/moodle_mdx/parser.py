@@ -9,8 +9,12 @@ from .model import AnswerModel, CourseModel, MoodleItem, MoodleSection, Question
 
 _DIRECTIVE_RE = re.compile(r"^(?P<fence>:{3,})(?P<type>[A-Za-z][\w-]*)(?P<attrs>\{.*\})?\s*$")
 _HEADING_RE = re.compile(r"^# (?P<title>.*?)(?:\s+(?P<attrs>\{.*\}))?\s*$")
+_SUBSECTION_RE = re.compile(r"^## (?P<title>.*?)(?:\s+(?P<attrs>\{.*\}))?\s*$")
 _ANSWER_RE = re.compile(r"^\s*-\s+\[(?P<mark>[ xX])\]\s+(?P<text>.*)$")
 _ASSET_RE = re.compile(r"^\s*-\s+(?P<path>.+?)\s*$")
+_ENTRY_RE = re.compile(r"^\s*-\s+(?P<text>.*?)(?:\s+(?P<attrs>\{.*\}))?\s*$")
+_BOARD_COLUMN_RE = re.compile(r"^-\s+(?P<text>.*?)(?:\s+(?P<attrs>\{.*\}))?\s*$")
+_BOARD_NOTE_RE = re.compile(r"^\s+-\s+(?P<text>.*?)(?:\s+(?P<attrs>\{.*\}))?\s*$")
 
 
 def parse_mdx(source: str) -> CourseModel:
@@ -49,6 +53,22 @@ def _parse_sections(body: str) -> list[MoodleSection]:
             section_id = str(attrs.get("id") or f"section-{index:02d}")
             current = MoodleSection(id=section_id, index=index, title=title, attrs=attrs)
             sections.append(current)
+            i += 1
+            continue
+        subsection = _SUBSECTION_RE.match(line)
+        if subsection and current is not None:
+            attrs = _parse_attrs(subsection.group("attrs") or "")
+            index = int(attrs["index"]) if "index" in attrs else index + 1
+            title = str(attrs.get("moodle_title") if "moodle_title" in attrs else subsection.group("title").strip())
+            section_id = str(attrs.get("id") or f"subsection-{index:02d}")
+            item_id = str(attrs.get("item_id") or attrs.get("itemid") or f"subsection_{_start_line_id(i)}")
+            item_attrs = dict(attrs)
+            item_attrs["target_section_id"] = section_id
+            current.items.append(MoodleItem(id=item_id, type="subsection", title=title, attrs=item_attrs))
+            section_attrs = dict(attrs)
+            section_attrs["subsection"] = True
+            section_attrs["parent_item_id"] = item_id
+            sections.append(MoodleSection(id=section_id, index=index, title=title, attrs=section_attrs))
             i += 1
             continue
         if current is None:
@@ -96,7 +116,17 @@ def _parse_directive(lines: list[str], start: int) -> tuple[MoodleItem, int]:
         item.questions = _parse_quiz_questions(body)
     if item_type == "folder":
         item.body, item.files = _parse_folder_body(body)
+    if item_type == "choice":
+        item.body, item.options = _parse_entry_body(body, default_key="maxanswers", default_start=1)
+    if item_type == "board":
+        item.body, item.columns = _parse_board_body(body)
+    if item_type == "questionnaire":
+        item.body, item.survey_questions = _parse_questionnaire_body(body)
     return item, end + 1
+
+
+def _start_line_id(line_index: int) -> str:
+    return f"{line_index + 1:02d}"
 
 
 def _parse_book_pages(body: str) -> list[dict[str, Any]]:
@@ -166,6 +196,122 @@ def _parse_folder_body(body: str) -> tuple[str, list[dict[str, Any]]]:
             continue
         intro_lines.append(line)
     return "\n".join(intro_lines).strip(), files
+
+
+def _parse_entry_body(
+    body: str,
+    *,
+    default_key: str | None = None,
+    default_start: int = 1,
+) -> tuple[str, list[dict[str, Any]]]:
+    intro_lines: list[str] = []
+    entries: list[dict[str, Any]] = []
+    for line in body.splitlines():
+        match = _ENTRY_RE.match(line)
+        if match:
+            entry = _parse_attrs(match.group("attrs") or "")
+            entry["text"] = match.group("text").strip()
+            if default_key is not None and default_key not in entry:
+                entry[default_key] = default_start + len(entries)
+            entries.append(entry)
+            continue
+        if entries and not line.strip():
+            continue
+        intro_lines.append(line)
+    return "\n".join(intro_lines).strip(), entries
+
+
+def _parse_board_body(body: str) -> tuple[str, list[dict[str, Any]]]:
+    intro_lines: list[str] = []
+    columns: list[dict[str, Any]] = []
+    for line in body.splitlines():
+        note_match = _BOARD_NOTE_RE.match(line)
+        if note_match and columns:
+            note = _parse_attrs(note_match.group("attrs") or "")
+            note["content"] = note_match.group("text").strip()
+            columns[-1].setdefault("notes", []).append(note)
+            continue
+        column_match = _BOARD_COLUMN_RE.match(line)
+        if column_match:
+            column = _parse_attrs(column_match.group("attrs") or "")
+            column["text"] = column_match.group("text").strip()
+            column["notes"] = []
+            columns.append(column)
+            continue
+        if columns and not line.strip():
+            continue
+        intro_lines.append(line)
+    return "\n".join(intro_lines).strip(), columns
+
+
+def _parse_questionnaire_body(body: str) -> tuple[str, list[dict[str, Any]]]:
+    lines = body.splitlines()
+    intro_lines: list[str] = []
+    questions: list[dict[str, Any]] = []
+    i = 0
+    seen_question = False
+    while i < len(lines):
+        match = _DIRECTIVE_RE.match(lines[i])
+        if match and match.group("type") == "q":
+            seen_question = True
+            fence = match.group("fence")
+            attrs = _parse_attrs(match.group("attrs") or "")
+            end = i + 1
+            body_lines: list[str] = []
+            while end < len(lines):
+                if lines[end].strip() == fence:
+                    break
+                body_lines.append(lines[end])
+                end += 1
+            if end >= len(lines):
+                raise ValueError(f"Questionnaire question starting at nested line {i + 1} is not closed")
+            questions.append(_questionnaire_question_from_attrs_and_body(attrs, body_lines, len(questions) + 1))
+            i = end + 1
+            continue
+        if not seen_question:
+            intro_lines.append(lines[i])
+        i += 1
+    return "\n".join(intro_lines).strip(), questions
+
+
+def _questionnaire_question_from_attrs_and_body(
+    attrs: dict[str, Any],
+    body_lines: list[str],
+    fallback_position: int,
+) -> dict[str, Any]:
+    content_lines: list[str] = []
+    choices: list[dict[str, Any]] = []
+    seen_choice = False
+    for line in body_lines:
+        match = _ENTRY_RE.match(line)
+        if match:
+            seen_choice = True
+            choice = _parse_attrs(match.group("attrs") or "")
+            choice["content"] = match.group("text").strip()
+            choices.append(choice)
+            continue
+        if seen_choice and not line.strip():
+            continue
+        if not seen_choice:
+            content_lines.append(line)
+    qtype = str(attrs.get("type") or "text")
+    question = {
+        "id": str(attrs.get("id") or f"questionnaire_q_{fallback_position:02d}"),
+        "type": qtype,
+        "name": str(attrs.get("name") or ""),
+        "content": "\n".join(content_lines).strip() or str(attrs.get("content") or ""),
+        "position": int(attrs.get("position", fallback_position)),
+        "required": bool(attrs.get("required", False)),
+        "length": int(attrs.get("length", 0)),
+        "precise": int(attrs.get("precise", 0)),
+        "deleted": str(attrs.get("deleted", "n")),
+        "extradata": attrs.get("extradata"),
+        "choices": choices,
+    }
+    for key, value in attrs.items():
+        if key not in question and key not in {"title"}:
+            question[key] = value
+    return question
 
 
 def _question_from_attrs_and_body(

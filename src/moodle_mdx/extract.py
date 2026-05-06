@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tarfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -17,6 +18,11 @@ def extract_mdx_from_mbz(mbz_path: str | Path, output_path: str | Path) -> Path:
     activities_by_section: dict[str, list[dict]] = {}
     for activity in report.activities:
         activities_by_section.setdefault(activity["sectionid"], []).append(activity)
+    subsection_section_ids = {
+        str(section["id"])
+        for section in report.sections
+        if section.get("component") == "mod_subsection" or section.get("modname") == "subsection"
+    }
 
     lines: list[str] = [
         "---",
@@ -49,6 +55,8 @@ def extract_mdx_from_mbz(mbz_path: str | Path, output_path: str | Path) -> Path:
         question_bank_entries = _question_bank_entries_by_id(archive)
         file_nodes = _file_nodes_by_component_and_filename(archive)
         for section in report.sections:
+            if str(section["id"]) in subsection_section_ids:
+                continue
             section_id = section["id"]
             title = section["title"] or "Allgemeines"
             lines.append(
@@ -112,6 +120,14 @@ def _activity_to_directive(
         return _assign_directive(archive, activity, attrs)
     if activity_type == "forum":
         return [f":::forum{{{attrs}}}", _forum_intro(archive, f"{directory}/forum.xml"), ":::"]
+    if activity_type == "subsection":
+        return [f"## {_quote(activity['title'])}"]
+    if activity_type == "choice":
+        return _choice_directive(archive, activity, attrs)
+    if activity_type == "questionnaire":
+        return _questionnaire_directive(archive, activity, attrs)
+    if activity_type == "board":
+        return _board_directive(archive, activity, attrs)
     if activity_type == "label":
         return [f":::label{{{attrs}}}", _label_intro(archive, f"{directory}/label.xml"), ":::"]
     return [f":::{activity_type}{{{attrs}}}", "", ":::"]
@@ -160,6 +176,199 @@ def _assign_directive(archive: tarfile.TarFile, activity: dict, attrs: str) -> l
         assign.findtext("intro", ""),
         ":::",
     ]
+
+
+def _choice_directive(archive: tarfile.TarFile, activity: dict, attrs: str) -> list[str]:
+    root = _read_xml(archive, f'{activity["directory"]}/choice.xml')
+    choice = root.find("choice")
+    if choice is None:
+        return [f":::choice{{{attrs}}}", "", ":::"]
+    extra_attrs = [
+        f"allowmultiple={_bool_attr(choice.findtext('allowmultiple', '0') != '0')}",
+        f"limitanswers={_bool_attr(choice.findtext('limitanswers', '0') != '0')}",
+        f"timeopen={choice.findtext('timeopen', '0')}",
+        f"timeclose={choice.findtext('timeclose', '0')}",
+    ]
+    lines = [f":::choice{{{attrs} {' '.join(extra_attrs)}}}", choice.findtext("intro", "")]
+    options = choice.findall("options/option")
+    if options:
+        lines.append("")
+        for option in options:
+            lines.append(
+                f"- {option.findtext('text', '')} {{maxanswers={option.findtext('maxanswers', '0')}}}"
+            )
+    lines.append(":::")
+    return lines
+
+
+def _questionnaire_directive(archive: tarfile.TarFile, activity: dict, attrs: str) -> list[str]:
+    root = _read_xml(archive, f'{activity["directory"]}/questionnaire.xml')
+    questionnaire = root.find("questionnaire")
+    if questionnaire is None:
+        return [f":::questionnaire{{{attrs}}}", "", ":::"]
+    extra_attrs = [
+        f"opendate={questionnaire.findtext('opendate', '0')}",
+        f"closedate={questionnaire.findtext('closedate', '0')}",
+    ]
+    survey = questionnaire.find("surveys/survey")
+    if survey is not None:
+        for source, target in {
+            "info": "survey_info",
+            "thanks_page": "thanks_page",
+            "thank_head": "thank_head",
+            "thank_body": "thank_body",
+        }.items():
+            value = _null_to_empty(survey.findtext(source, ""))
+            if value:
+                extra_attrs.append(f'{target}="{_quote(value)}"')
+    lines = [f"::::questionnaire{{{attrs} {' '.join(extra_attrs)}}}", questionnaire.findtext("intro", "")]
+    questions = questionnaire.findall("surveys/survey/questions/question")
+    has_dependencies = any(question.findall("quest_dependencies/quest_dependency") for question in questions)
+    question_refs = {question.get("id", ""): f"q{question.get('id', '')}" for question in questions if question.get("id")}
+    choice_refs = {
+        choice.get("id", ""): f"c{choice.get('id', '')}"
+        for question in questions
+        for choice in question.findall("quest_choices/quest_choice")
+        if choice.get("id")
+    }
+    if questions:
+        lines.append("")
+        for question in questions:
+            lines.extend(_questionnaire_question_directive(question, has_dependencies, question_refs, choice_refs))
+            lines.append("")
+    lines.append("::::")
+    return lines
+
+
+QUESTIONNAIRE_TYPE_NAMES = {
+    "1": "yesno",
+    "2": "textarea",
+    "3": "text",
+    "4": "radio",
+    "5": "checkbox",
+    "6": "dropdown",
+    "8": "rate",
+    "9": "date",
+    "11": "slider",
+    "99": "pagebreak",
+    "100": "sectiontext",
+}
+
+
+def _questionnaire_question_directive(
+    question: ET.Element,
+    include_ids: bool = False,
+    question_refs: dict[str, str] | None = None,
+    choice_refs: dict[str, str] | None = None,
+) -> list[str]:
+    question_refs = question_refs or {}
+    choice_refs = choice_refs or {}
+    qtype = QUESTIONNAIRE_TYPE_NAMES.get(question.findtext("type_id", ""), question.findtext("type_id", "text"))
+    attrs = [
+        f'type="{_quote(qtype)}"',
+        f'name="{_quote(_null_to_empty(question.findtext("name", "")))}"',
+    ]
+    if include_ids and question.get("id"):
+        attrs.append(f'id="{_quote(question_refs.get(question.get("id", ""), "q" + question.get("id", "")))}"')
+    attrs.extend(_questionnaire_dependency_attrs(question, question_refs, choice_refs))
+    attrs.extend(
+        [
+            f"required={_bool_attr(question.findtext('required', 'n') == 'y')}",
+            f"length={question.findtext('length', '0')}",
+            f"precise={question.findtext('precise', '0')}",
+            f"position={question.findtext('position', '0')}",
+        ]
+    )
+    extradata = _null_to_empty(question.findtext("extradata", ""))
+    if qtype == "slider":
+        attrs.extend(_questionnaire_slider_attrs(extradata))
+    elif extradata not in {"", "0", "[]"}:
+        attrs.append(f'extradata="{_quote(extradata)}"')
+    lines = [f":::q{{{' '.join(attrs)}}}"]
+    content = question.findtext("content", "")
+    if qtype != "pagebreak" and content:
+        lines.append(content)
+    choices = question.findall("quest_choices/quest_choice")
+    if choices:
+        lines.append("")
+        for choice in choices:
+            value = _null_to_empty(choice.findtext("value", ""))
+            choice_attrs = []
+            if include_ids and choice.get("id"):
+                choice_attrs.append(f'id="{_quote(choice_refs.get(choice.get("id", ""), "c" + choice.get("id", "")))}"')
+            if value:
+                choice_attrs.append(f'value="{_quote(value)}"')
+            attrs_text = f" {{{' '.join(choice_attrs)}}}" if choice_attrs else ""
+            lines.append(f"- {choice.findtext('content', '')}{attrs_text}")
+    lines.append(":::")
+    return lines
+
+
+def _questionnaire_dependency_attrs(
+    question: ET.Element,
+    question_refs: dict[str, str],
+    choice_refs: dict[str, str],
+) -> list[str]:
+    dependencies = question.findall("quest_dependencies/quest_dependency")
+    if not dependencies:
+        return []
+    depends_on = []
+    joins = []
+    logics = []
+    for dependency in dependencies:
+        question_ref = question_refs.get(dependency.findtext("dependquestionid", ""), f"q{dependency.findtext('dependquestionid', '')}")
+        choice_ref = choice_refs.get(dependency.findtext("dependchoiceid", ""), f"c{dependency.findtext('dependchoiceid', '')}")
+        depends_on.append(f"{question_ref}:{choice_ref}")
+        joins.append(dependency.findtext("dependandor", "and"))
+        logics.append(dependency.findtext("dependlogic", "1"))
+    attrs = [f'depends_on="{_quote(",".join(depends_on))}"']
+    if any(join != "and" for join in joins):
+        attrs.append(f'depends_join="{_quote(",".join(joins))}"')
+    if any(logic != "1" for logic in logics):
+        attrs.append(f'depends_logic="{_quote(",".join(logics))}"')
+    return attrs
+
+
+def _questionnaire_slider_attrs(extradata: str) -> list[str]:
+    if not extradata:
+        return []
+    try:
+        data = json.loads(extradata)
+    except json.JSONDecodeError:
+        return [f'extradata="{_quote(extradata)}"']
+    if not isinstance(data, dict):
+        return []
+    attrs: list[str] = []
+    for key in ("minrange", "maxrange", "startingvalue", "stepvalue"):
+        if key in data:
+            attrs.append(f"{key}={data[key]}")
+    for key in ("leftlabel", "centerlabel", "rightlabel"):
+        if key in data:
+            attrs.append(f'{key}="{_quote(str(data[key]))}"')
+    return attrs
+
+
+def _board_directive(archive: tarfile.TarFile, activity: dict, attrs: str) -> list[str]:
+    root = _read_xml(archive, f'{activity["directory"]}/board.xml')
+    board = root.find("board")
+    if board is None:
+        return [f":::board{{{attrs}}}", "", ":::"]
+    extra_attrs = [
+        f'background_color="{_quote(board.findtext("background_color", ""))}"',
+        f"sortby={board.findtext('sortby', '3')}",
+    ]
+    lines = [f":::board{{{attrs} {' '.join(extra_attrs)}}}", board.findtext("intro", "")]
+    columns = board.findall("columns/column")
+    if columns:
+        lines.append("")
+        for column in columns:
+            lines.append(f"- {column.findtext('name', '')}")
+            for note in column.findall("notes/note"):
+                heading = note.findtext("heading", "")
+                attrs = f' {{heading="{_quote(heading)}"}}' if heading else ""
+                lines.append(f"  - {note.findtext('content', '')}{attrs}")
+    lines.append(":::")
+    return lines
 
 
 def _folder_directive(
@@ -360,6 +569,12 @@ def _node_text(node: ET.Element | None, path: str, default: str) -> str:
     if node is None:
         return default
     return node.findtext(path, default) or default
+
+
+def _null_to_empty(value: str | None) -> str:
+    if value in {None, "$@NULL@$"}:
+        return ""
+    return value
 
 
 def _bool_attr(value: bool) -> str:
