@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mdx2moodle"
+version = "0.1.0"
+description = "Generate Moodle MBZ course backups from MDX course descriptions."
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+mdx2moodle = "moodle_mdx.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

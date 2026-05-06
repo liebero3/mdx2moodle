@@ -1,0 +1,33 @@
+# Python/cache/build artifacts
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+build/
+dist/
+*.egg-info/
+
+# OS/editor metadata
+.DS_Store
+
+# Private Moodle course backups and generated outputs
+*.mbz
+/out/
+/moodle_manifest.json
+/*_manifest.json
+
+# Private extracted template authoring state
+/kurs.mdx
+/assets/folder/
+/assets/geogebra/
+
+# Private parity tests while they reference local template data
+/tests/test_pipeline.py
+
+# Internal planning and scratch documentation
+/idee.md
+/sprints.md
+/fixtures/
+
+# Local-only scratch space for private templates/assets
+/local/

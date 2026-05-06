@@ -1,0 +1,64 @@
+---
+course:
+  title: "Minimaler Sprint-6-Kurs"
+  shortname: "S6MIN"
+  format: "tiles"
+  startdate: 1777932000
+  enddate: 0
+  visible: true
+  enablecompletion: true
+tiles:
+  hiddensections: 1
+  coursedisplay: 1
+  defaulttileicon: "pie-chart"
+  basecolour: "#1670CC"
+backup:
+  moodle_release: "4.5.10 (Build: 20260216)"
+---
+
+# Einstieg {index=0 moodle_title="Einstieg"}
+summary: <p>Ein kurzer Kurs, der direkt aus MDX gebaut wird.</p>
+
+:::label{title="Willkommen"}
+<p>Willkommen im templatefreien Sprint-6-Minimalkurs.</p>
+:::
+
+::::book{title="Lernbuch"}
+:::page{title="Erste Seite"}
+<p>Eine kurze Lernbuchseite.</p>
+:::
+::::
+
+::::quiz{title="Kurzer Selbsttest"}
+:::question{type="multichoice" name="Erste Frage" slot=1 page=1 defaultmark="1.0000000" penalty="0.3333333" maxmark="1.0000000" single=true shuffleanswers=false answernumbering="none"}
+Welche Aussage stimmt?
+
+- [x] Dieser Kurs wird direkt aus MDX gebaut.
+- [ ] Dieser Kurs kopiert ein vorhandenes Moodle-Backup.
+:::
+:::question{type="multichoice" name="Zweite Frage" slot=2 page=2 defaultmark="1.0000000" penalty="0.3333333" maxmark="1.0000000" single=true shuffleanswers=false answernumbering="none"}
+Wie viele Antwortoptionen hat diese Frage?
+
+- [ ] Eine
+- [x] Drei
+- [ ] Fünf
+:::
+::::
+
+:::assign{title="Reflexion" grade=100 gradingduedate=1779055200 maxattempts=1 attemptreopenmethod="untilpass" completionsubmit=true submission_onlinetext=true submission_file=false submission_comments=true feedback_comments=true feedback_editpdf=true}
+<p>Beschreibe kurz, was im Standalone-Build erzeugt wurde.</p>
+:::
+
+:::forum{title="Ankündigungen"}
+<p>Ankündigungen und Nachrichten.</p>
+:::
+
+:::folder{title="Material"}
+<p>Eine lokale Datei im Moodle-Dateipool.</p>
+
+- assets/material.pdf
+:::
+
+:::geogebra{title="GeoGebra" file="assets/geogebra.ggb" width=1040 height=640}
+<p>Eine lokale GeoGebra-Datei.</p>
+:::

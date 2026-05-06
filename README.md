@@ -1,0 +1,96 @@
+# mdx2moodle
+
+Dieses Projekt erstellt Moodle-Kurse aus gut lesbaren MDX-Dateien. Ziel ist,
+Kursinhalte nicht direkt in Moodle zusammenzuklicken, sondern sie als Text zu
+beschreiben, versionierbar zu halten und daraus ein restore-fähiges
+Moodle-Backup (`.mbz`) zu bauen.
+
+MDX bleibt dabei für Menschen gut lesbar und kann zugleich von LLMs gut erzeugt
+und überarbeitet werden: Überschriften, Absätze, Listen und eingebettetes HTML
+beschreiben die Inhalte, zusätzliche Directives beschreiben Moodle-Aktivitäten.
+Aktuell kann der Builder daraus unter anderem Labels, Bücher, Tests, Aufgaben,
+Foren, Ordner und GeoGebra-Aktivitäten erzeugen. Weitere Moodle-Aktivitäten
+werden nach und nach ergänzt.
+
+Der normale Arbeitsfluss ist:
+
+1. Kurs als MDX schreiben.
+2. Lokale Assets wie PDFs oder GeoGebra-Dateien beilegen.
+3. MDX validieren.
+4. `.mbz` bauen.
+5. `.mbz` in Moodle als Kurs wiederherstellen.
+
+Ein vollständiges, templatefreies Beispiel liegt unter
+`examples/minimal/kurs.mdx`.
+
+## Unterstützte Inhalte
+
+Der Standalone-Build erzeugt eine neue Moodle-Backup-Struktur mit synthetischen
+IDs, Restore-Settings und den notwendigen Moodle-Sidecars. Aktuell unterstützt:
+
+- Kurs-Metadaten und Tiles-Formatoptionen
+- Sections und Labels
+- Books mit verschachtelten Seiten
+- Quizze mit `multichoice`-Fragen
+- Assign, Forum, Folder und GeoGebra
+- lokale Asset-Dateien im Moodle-File-Pool
+
+## Beispiel
+
+```mdx
+---
+course:
+  title: "Beispielkurs"
+  shortname: "BEISPIEL"
+  format: "tiles"
+backup:
+  moodle_release: "4.5.10 (Build: 20260216)"
+---
+
+# Einstieg
+summary: <p>Ein kurzer Einstieg in den Kurs.</p>
+
+:::label{title="Willkommen"}
+<p>Willkommen im Kurs.</p>
+:::
+
+::::quiz{title="Kurzer Selbsttest"}
+:::question{type="multichoice" name="Erste Frage" single=true}
+Welche Aussage stimmt?
+
+- [x] Dieser Kurs wurde aus MDX erzeugt.
+- [ ] Dieser Kurs wurde manuell in Moodle geklickt.
+:::
+::::
+```
+
+Die vollständige Syntax ist in der Dokumentation beschrieben:
+
+- [MDX-Syntax](docs/mdx-syntax.md)
+
+## Befehle
+
+Minimalbeispiel validieren:
+
+```bash
+PYTHONPATH=src python3 -m moodle_mdx.cli validate examples/minimal/kurs.mdx
+```
+
+Minimalbeispiel als Moodle-Backup bauen:
+
+```bash
+PYTHONPATH=src python3 -m moodle_mdx.cli build examples/minimal/kurs.mdx out/minimal.mbz --manifest out/minimal_manifest.json
+```
+
+Die erzeugte Datei `out/minimal.mbz` kann anschließend in Moodle über die
+Wiederherstellen-Funktion als Kurs importiert werden.
+
+## Tests
+
+```bash
+PYTHONPATH=src python3 -m unittest tests.test_standalone_public -v
+```
+
+Der öffentliche Test prüft, dass das beiliegende Minimalbeispiel validiert,
+eine Standalone-MBZ erzeugt und die erwarteten Moodle-Dateien inklusive lokaler
+Assets enthält.
